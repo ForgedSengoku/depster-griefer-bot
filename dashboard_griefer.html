@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mineflayer DepSter Bot Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        :root {
+            --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+        }
+        .theme-inferno {
+            --bg-primary: #0d0d0d; --bg-secondary: #1a1a1a; --bg-tertiary: #101010;
+            --text-primary: #f5f5f5; --text-secondary: #b3b3b3; --border-color: #333333;
+            --accent-primary: #ff4141; --accent-primary-hover: #ff1c1c; --accent-danger: #e65252;
+            --accent-danger-hover: #d14444; --accent-shadow: 0 4px 20px rgba(255, 65, 65, 0.5);
+            --danger-shadow: 0 4px 15px rgba(230, 82, 82, 0.4); --success-color: #4CAF50;
+        }
+        body {
+            font-family: 'Poppins', sans-serif; background-color: var(--bg-primary); color: var(--text-primary);
+            margin: 0; padding: 0; line-height: 1.6; transition: background-color 0.5s ease; overflow-x: hidden;
+        }
+        #dashboard { max-width: 1400px; margin: 2rem auto; padding: 1rem; display: grid; grid-template-columns: 1fr 350px; gap: 2rem; }
+        .card-container { background-color: var(--bg-secondary); border-radius: 12px; border: 1px solid var(--border-color); padding: 2rem; margin-bottom: 2rem; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3); }
+        .title-text { font-size: 2.5rem; font-weight: 700; text-align: center; margin-bottom: 0.5rem; background: linear-gradient(90deg, var(--accent-primary), var(--text-primary)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .section-title { font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; border-left: 4px solid var(--accent-primary); padding-left: 1rem; }
+        .btn { padding: 12px 24px; border-radius: 8px; border: none; font-size: 1rem; font-weight: 600; cursor: pointer; text-transform: uppercase; letter-spacing: 1px; transition: all 0.3s var(--ease-out-quart); }
+        .btn-primary { background-color: var(--accent-primary); color: white; box-shadow: var(--accent-shadow); }
+        .btn-primary:hover { background-color: var(--accent-primary-hover); transform: translateY(-3px); }
+        .btn-danger { background-color: var(--accent-danger); color: white; box-shadow: var(--danger-shadow); }
+        .btn-danger:hover { background-color: var(--accent-danger-hover); transform: translateY(-3px); }
+        .btn-secondary { background-color: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); }
+        .btn-secondary:hover { background-color: var(--border-color); color: var(--text-primary); }
+        .input-field { width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border-color); background-color: var(--bg-tertiary); color: var(--text-primary); font-size: 1rem; outline: none; box-sizing: border-box; transition: all 0.3s ease; }
+        .input-field:focus { border-color: var(--accent-primary); box-shadow: 0 0 15px rgba(255, 65, 65, 0.3); }
+        .form-group { display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; }
+        .global-actions .form-group { display: grid; grid-template-columns: 1fr auto auto auto auto; }
+        #log-container { height: 400px; overflow-y: scroll; border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; background-color: var(--bg-tertiary); font-family: 'Courier New', monospace; font-size: 0.9rem; white-space: pre-wrap; word-wrap: break-word; }
+        .log-error { color: var(--accent-danger); } .log-info { color: #61afef; } .log-warn { color: #e5c07b; }
+        #accounts-list { display: flex; flex-direction: column; gap: 1rem; }
+        .account-card { background-color: var(--bg-tertiary); border-left: 3px solid grey; padding: 1rem; border-radius: 8px; transition: all 0.3s ease; }
+        .account-card.online { border-left-color: var(--success-color); }
+        .account-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; font-weight: 600; }
+        .status-dot { height: 10px; width: 10px; background-color: grey; border-radius: 50%; display: inline-block; margin-right: 8px; }
+        .status-dot.online { background-color: var(--success-color); }
+        .account-status { font-size: 0.9rem; color: var(--text-secondary); margin-top: 0.5rem; }
+        #auth-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1000; background-color: var(--bg-secondary); border-radius: 12px; padding: 2rem; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5); }
+        #auth-modal.show { display: block; } #overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.7); z-index: 999; } #overlay.show { display: block; }
+        @media (max-width: 900px) { #dashboard { grid-template-columns: 1fr; } .global-actions .form-group { grid-template-columns: 1fr; gap: 0.5rem;} }
+    </style>
+</head>
+<body class="theme-inferno">
+    <div id="dashboard">
+        <div class="main-content">
+            <h1 class="title-text">Block Game Crossplay Bot Control</h1>
+            <h12 class="decsription-text" style="text-align: center; color: var(--text-secondary); margin-bottom: 2rem;">Tool provided by ForgedSengoku, Designed for griefing. Griefing nocheatplus servers with 7 bots. But in this case it was designed for this server.</h12>
+            <div class="card-container global-actions">
+                <h2 class="section-title">Global Actions</h2>
+                <div class="form-group">
+                    <input class="input-field" type="text" id="global-target-input" placeholder="Player Username">
+                    <button class="btn btn-primary" id="follow-all-btn" title="All bots will follow the target">Follow</button>
+                    <button class="btn btn-primary" id="trap-all-btn" title="All bots will trap the target in a dirt box">Trap</button>
+                    <button class="btn btn-danger" id="grief-all-btn" title="All bots will follow and destroy blocks around the target">Grief</button>
+                    <button class="btn btn-secondary" id="stop-all-btn" title="Stops all bot actions">Stop All</button>
+                </div>
+            </div>
+
+            <div class="card-container">
+                <h2 class="section-title">Management & World</h2>
+                 <div class="form-group">
+                    <button class="btn btn-primary" id="spawn-auth-bot-btn">Spawn New Bot</button>
+                    <button class="btn btn-danger" id="disconnect-all-btn">Disconnect All</button>
+                    <button class="btn btn-secondary" id="clearmap-btn">Clear Map</button>
+                 </div>
+                 <div class="form-group">
+                    <input class="input-field" type="text" id="chat-message" placeholder="Broadcast chat message...">
+                    <button class="btn btn-secondary" id="send-chat-btn">Send</button>
+                </div>
+            </div>
+
+            <div class="card-container">
+                <h2 class="section-title">Event Log</h2>
+                <div id="log-container"></div>
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="card-container">
+                <h2 class="section-title">Online Bots</h2>
+                <div id="accounts-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="overlay"></div>
+    <div id="auth-modal">
+        <div class="modal-content">
+            <h3 class="section-title">Authentication Required</h3>
+            <p>A new bot requires authentication. Please follow the link and enter the code below.</p>
+            <p id="auth-code-info" style="font-size: 1.2rem; font-weight: bold; text-align: center;"></p>
+            <a id="auth-link" href="#" target="_blank" class="btn btn-primary">Open Microsoft Auth</a>
+            <button class="btn btn-secondary" id="close-auth-btn" style="margin-top: 1rem;">Close</button>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const botAccounts = new Map();
+
+        const logContainer = document.getElementById('log-container');
+        const accountsList = document.getElementById('accounts-list');
+        const globalTargetInput = document.getElementById('global-target-input');
+
+        function appendLog(logObj) {
+            const logEntry = document.createElement('div');
+            // This now handles logs from 'Server', individual bots, and the 'Dashboard' itself
+            const botPrefix = logObj.bot ? `<strong style="color: var(--accent-primary);">${logObj.bot}</strong>: ` : '';
+            logEntry.innerHTML = `<span>[${new Date().toLocaleTimeString()}]</span> ${botPrefix}${logObj.text}`;
+            if(logObj.type === 'error') logEntry.classList.add('log-error');
+            if(logObj.type === 'info') logEntry.classList.add('log-info');
+            if(logObj.type === 'warn') logEntry.classList.add('log-warn');
+            logContainer.appendChild(logEntry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        function renderAccounts() {
+            accountsList.innerHTML = '';
+            const sortedAccounts = [...botAccounts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+            if (sortedAccounts.length === 0) {
+                accountsList.innerHTML = '<p style="color: var(--text-secondary);">No bots are currently online.</p>';
+            }
+
+            for (const [username, account] of sortedAccounts) {
+                const card = document.createElement('div');
+                card.id = `bot-${username.replace(/[^a-zA-Z0-9]/g, '-')}`; // Sanitize username for ID
+                card.className = `account-card ${account.online ? 'online' : ''}`;
+                const statusText = account.online ? 'Online' : 'Offline';
+                
+                card.innerHTML = `
+                    <div class="account-card-header">
+                        <span>${username}</span>
+                        <span>
+                            <span class="status-dot ${account.online ? 'online' : ''}"></span>
+                            ${statusText}
+                        </span>
+                    </div>
+                    <div class="account-status">${account.status || 'Idle'}</div>
+                `;
+                accountsList.appendChild(card);
+            }
+        }
+
+        function sendCommand(command) {
+            const target = globalTargetInput.value.trim();
+            if (['follow', 'grief', 'trap'].includes(command) && !target) {
+                appendLog({ bot: 'Dashboard', text: `A target username is required for the '${command}' command.`, type: 'warn' });
+                return;
+            }
+            socket.emit('send-command', { command, target });
+        }
+        
+        // --- Socket Listeners ---
+        socket.on('initial-accounts', accounts => {
+            accounts.forEach(username => botAccounts.set(username, { online: true, status: 'Idle' }));
+            renderAccounts();
+        });
+
+        socket.on('bot-online', data => {
+            botAccounts.set(data.username, { online: true, status: data.status || 'Initializing...' });
+            renderAccounts();
+            appendLog({ bot: 'System', text: `${data.username} is connecting.`, type: 'info' });
+        });
+        
+        socket.on('bot-authenticated', data => {
+            const oldData = botAccounts.get(data.tempUsername);
+            botAccounts.delete(data.tempUsername);
+            botAccounts.set(data.finalUsername, { ...oldData, online: true, status: 'Idle' });
+            renderAccounts();
+            appendLog({ bot: 'System', text: `${data.tempUsername} authenticated as ${data.finalUsername}.`, type: 'info' });
+        });
+
+        socket.on('bot-status-update', data => {
+            if (botAccounts.has(data.username)) {
+                botAccounts.get(data.username).status = data.status;
+                const sanitizedId = data.username.replace(/[^a-zA-Z0-9]/g, '-');
+                const statusEl = document.querySelector(`#bot-${sanitizedId} .account-status`);
+                if (statusEl) statusEl.textContent = data.status;
+            }
+        });
+
+        socket.on('bot-offline', data => {
+            if (botAccounts.has(data.username)) {
+                botAccounts.get(data.username).online = false;
+                renderAccounts();
+                appendLog({ bot: 'System', text: `${data.username} went offline.`, type: 'warn' });
+            }
+        });
+
+        socket.on('log', appendLog);
+
+        socket.on('auth-link', data => {
+            document.getElementById('auth-link').href = data.link;
+            document.getElementById('auth-code-info').textContent = `Code: ${data.user_code}`;
+            document.getElementById('auth-modal').classList.add('show');
+            document.getElementById('overlay').classList.add('show');
+        });
+
+        // --- Event Listeners ---
+        document.getElementById('follow-all-btn').addEventListener('click', () => sendCommand('follow'));
+        document.getElementById('trap-all-btn').addEventListener('click', () => sendCommand('trap'));
+        document.getElementById('grief-all-btn').addEventListener('click', () => sendCommand('grief'));
+        document.getElementById('stop-all-btn').addEventListener('click', () => sendCommand('stop'));
+        document.getElementById('clearmap-btn').addEventListener('click', () => sendCommand('clearmap'));
+        
+        document.getElementById('spawn-auth-bot-btn').addEventListener('click', () => socket.emit('spawn-auth-bot'));
+        document.getElementById('disconnect-all-btn').addEventListener('click', () => socket.emit('disconnect-all'));
+        
+        document.getElementById('send-chat-btn').addEventListener('click', () => {
+            const msg = document.getElementById('chat-message').value.trim();
+            if (msg) {
+                socket.emit('send-chat', msg);
+                document.getElementById('chat-message').value = '';
+            }
+        });
+        
+        document.getElementById('close-auth-btn').addEventListener('click', () => {
+            document.getElementById('auth-modal').classList.remove('show');
+            document.getElementById('overlay').classList.remove('show');
+        });
+    </script>
+</body>
+</html>
+
