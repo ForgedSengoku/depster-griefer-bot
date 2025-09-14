@@ -86,7 +86,7 @@ if (isMainThread) {
         case 'authenticated':
           const finalUsername = msg.nickname;
           const initialUsername = msg.initialUsername;
-         
+        
           if (activeWorkers.has(initialUsername)) {
               // Update the final username for the existing entry
               const workerEntry = activeWorkers.get(initialUsername);
@@ -97,7 +97,7 @@ if (isMainThread) {
                   activeWorkers.set(finalUsername, workerEntry);
               }
           }
-         
+        
           io.emit('bot-authenticated', { tempUsername: initialUsername, finalUsername: finalUsername });
           // The specific logging format you requested
           console.log(`[main] Authed usrname: ${finalUsername}`);
@@ -167,7 +167,7 @@ if (isMainThread) {
           });
           return;
       }
-     
+    
       for (const { worker } of activeWorkers.values()) {
         worker.postMessage({ type: 'command', ...data });
       }
@@ -331,11 +331,11 @@ if (isMainThread) {
     async function griefLogic(targetPos) {
         bot.pathfinder.setGoal(new GoalBlock(targetPos.x, targetPos.y, targetPos.z), true);
         const blocks = [];
-        for (let dx = -cfg.scanRadius; dx <= cfg.scanRadius; dx++) {
-        for (let dy = -cfg.scanRadius; dy <= cfg.scanRadius; dy++) {
-        for (let dz = -cfg.scanRadius; dz <= cfg.scanRadius; dz++) {
+        for (let dx = -scanRadius; dx <= scanRadius; dx++) {
+        for (let dy = -scanRadius; dy <= scanRadius; dy++) {
+        for (let dz = -scanRadius; dz <= scanRadius; dz++) {
             const bpos = targetPos.offset(dx, dy, dz);
-            if (bot.entity.position.distanceTo(bpos) > cfg.maxDig) continue;
+            if (bot.entity.position.distanceTo(bpos) > maxDig) continue;
             const b = bot.blockAt(bpos);
             if (!b || !b.position || b.name === 'air' || protectedIds.has(b.type)) continue;
             blocks.push(b);
@@ -344,7 +344,7 @@ if (isMainThread) {
         blocks.sort((a, b) => bot.entity.position.distanceTo(a.position) - bot.entity.position.distanceTo(b.position));
         const block = blocks[0];
         const now = Date.now();
-        if (now - bot.state.lastDig < cfg.clickDelay) return;
+        if (now - bot.state.lastDig < clickDelay) return;
         bot.state.lastDig = now;
         await bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true);
         bot.dig(block, true, 'raycast').catch(() => {});
@@ -382,7 +382,7 @@ if (isMainThread) {
                 for (const adjOffset of adjacentOffsets) {
                     const referenceBlockPos = blockPos.plus(adjOffset);
                     const referenceBlock = bot.blockAt(referenceBlockPos);
-                   
+                  
                     if (referenceBlock && referenceBlock.boundingBox === 'block') {
                          try {
                             // The face vector is the inverse of the offset from the placement position
@@ -404,7 +404,7 @@ if (isMainThread) {
     async function getBlockInHand(itemName) {
         const itemData = mcData.itemsByName[itemName];
         if (!itemData) return null;
-       
+      
         let item = bot.inventory.findInventoryItem(itemData.id);
         if (item) return item;
         // If no item and in creative, give one
