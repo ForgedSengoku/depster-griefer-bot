@@ -1,14 +1,11 @@
 /*
-  Ultimate Minecraft Bot Server - Gemini Overhaul
-  - Web dashboard control via Socket.io with enhanced UI feedback.
-  - Microsoft authentication flow is now visually tracked on the dashboard.
-  - New `trap` command: Bots will follow a player and build a dirt prison around them, as seen in the video.
-  - New collaborative `clearmap` command: Main thread assigns each bot a unique direction, making them spread out and clear the map efficiently.
-  - Griefing Logic Reworked: Removed stopping/sneaking to match the older, more aggressive style. Bot follows while breaking blocks.
-  - Configuration Updated: CPS set to 13 as requested.
-  - Persistent Usernames: Authenticated Microsoft account usernames are now stored in `accountsList.txt` for subsequent sessions.
-  - Status Updates: Bots report their current action (e.g., Trapping, Griefing, Idle) back to the dashboard.
-  - Full Logging: All server-side console logs and dependency outputs are now forwarded to the web dashboard.
+  Ultimate Minecraft Bot Server - Gemini Overhaul 2.0
+  - Connection Stability: Fixed account mapping issues on disconnect. Authenticated usernames are now correctly linked to their source from accountsList.txt, preventing mismatches.
+  - Enhanced Logging: Added clear logs to show which file username corresponds to which authenticated in-game name.
+  - Trap Logic Reworked: Significantly improved the 'trap' command's reliability. Bots now correctly acquire dirt (even in creative) and build the prison structure more effectively.
+  - Griefing Adjustments: Griefing movement is now slower and non-sprinting for a more methodical block-breaking approach, as requested.
+  - Configuration Update: CPS is set to 12.
+  - Dashboard Renamed: The frontend file is now `bot_dashboard.html`.
 */
 
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
@@ -24,8 +21,8 @@ const sharedConfig = {
   server: { host: 'crossplay.my.pebble.host', port: 25602, version: '1.21.1' },
   protectedNames: ['light_gray_concrete', 'smooth_quartz_slab', 'water', 'barrier', 'bedrock'],
   // breaking params
-  cps: 13, // Set to 13 CPS as requested
-  clickDelay: 1000 / 13,
+  cps: 12, // Set to 12 CPS as requested
+  clickDelay: 1000 / 12,
   scanRadius: 8,
   maxDig: 8,
   // trap params
@@ -50,30 +47,24 @@ if (isMainThread) {
   const server = http.createServer(app);
   const io = new Server(server);
 
-  // --- Global Log Forwarder ---
-  // This captures all stdout and stderr output from the main process and all its
-  // worker threads (as they share the process streams), ensuring everything seen
-  // in the terminal also appears on the dashboard, including dependency logs.
+  // This map stores the initial username (from file or temp auth name) as the key
+  const activeWorkers = new Map(); // initialUsername -> { worker, finalUsername }
+
   const forwardStreamOutputToDashboard = (stream, type) => {
       const originalWrite = stream.write;
       stream.write = (chunk, encoding, callback) => {
           const message = chunk.toString();
-          // Don't forward empty messages
           if (message.trim()) {
               io.emit('log', { bot: 'System', text: message, type });
           }
-          // Also, write to the actual console to keep terminal logging intact
           return originalWrite.apply(stream, [chunk, encoding, callback]);
       };
   };
 
   forwardStreamOutputToDashboard(process.stdout, 'info');
   forwardStreamOutputToDashboard(process.stderr, 'error');
-  // --- End Global Log Forwarder ---
 
-  const activeWorkers = new Map(); // finalUsername -> Worker
-
-  app.get('/', (req, res) => res.sendFile(path.resolve(__dirname, 'dashboard_griefer.html')));
+  app.get('/', (req, res) => res.sendFile(path.resolve(__dirname, 'bot_dashboard.html')));
 
   function readAccountsFile() {
     try {
@@ -91,18 +82,18 @@ if (isMainThread) {
       return;
     }
 
-    const worker = new Worker(__filename, { 
-      workerData: { username, sharedConfig, isAuthWorker } 
+    const worker = new Worker(__filename, {
+      workerData: { username, sharedConfig, isAuthWorker }
     });
-    
-    activeWorkers.set(username, worker);
+
+    // Store worker reference immediately
+    activeWorkers.set(username, { worker, finalUsername: null });
     console.log(`[main] Spawned worker for: ${username} (isAuth: ${isAuthWorker})`);
 
     worker.on('message', msg => {
       if (!msg || !msg.type) return;
       const botName = msg.bot || username;
 
-      // These structured messages from workers are sent directly to avoid being labeled "System"
       switch (msg.type) {
         case 'auth-link':
           io.emit('auth-link', { ...msg, username: botName });
@@ -111,17 +102,32 @@ if (isMainThread) {
 
         case 'authenticated':
           const finalUsername = msg.nickname;
-          if (username !== finalUsername && activeWorkers.has(username)) {
-              const workerRef = activeWorkers.get(username);
-              activeWorkers.delete(username);
-              activeWorkers.set(finalUsername, workerRef);
+          const initialUsername = msg.initialUsername;
+          
+          if (activeWorkers.has(initialUsername)) {
+              // Update the final username for the existing entry
+              const workerEntry = activeWorkers.get(initialUsername);
+              workerEntry.finalUsername = finalUsername;
+
+              // If the initial username was a temp one, we need to remap
+              if (isAuthWorker) {
+                  activeWorkers.delete(initialUsername);
+                  activeWorkers.set(finalUsername, workerEntry);
+              }
           }
-          io.emit('bot-authenticated', { tempUsername: username, finalUsername: finalUsername });
-          io.emit('log', { bot: finalUsername, text: `Authenticated successfully.`, type: 'info' });
+          
+          io.emit('bot-authenticated', { tempUsername: initialUsername, finalUsername: finalUsername });
+          // The specific logging format you requested
+          console.log(`[main] Authed usrname: ${finalUsername}`);
+          console.log(`[main] txtfileusername: ${initialUsername}`);
           break;
-        
+
         case 'status-update':
-            io.emit('bot-status-update', { username: botName, status: msg.status });
+            // Find the correct bot to update, it could be keyed by initial or final name
+            let botToUpdate = activeWorkers.get(botName) || Array.from(activeWorkers.values()).find(w => w.finalUsername === botName);
+            if (botToUpdate) {
+                 io.emit('bot-status-update', { username: botToUpdate.finalUsername || botName, status: msg.status });
+            }
             break;
 
         case 'log':
@@ -136,17 +142,23 @@ if (isMainThread) {
 
     worker.on('exit', code => {
       let exitedBotKey = null;
-      for (const [key, w] of activeWorkers.entries()) {
-        if (w === worker) {
+      let exitedBotInfo = null;
+      for (const [key, wInfo] of activeWorkers.entries()) {
+        if (wInfo.worker === worker) {
           exitedBotKey = key;
+          exitedBotInfo = wInfo;
           break;
         }
       }
-      
+
       if (exitedBotKey) {
         activeWorkers.delete(exitedBotKey);
-        io.emit('bot-offline', { username: exitedBotKey });
-        console.log(`[main] Worker for ${exitedBotKey} exited with code ${code}.`);
+        // If the bot had a final name, use that for the offline message
+        const offlineUsername = exitedBotInfo.finalUsername || exitedBotKey;
+        io.emit('bot-offline', { username: offlineUsername });
+        console.log(`[main] Worker for ${offlineUsername} (initial: ${exitedBotKey}) exited with code ${code}.`);
+
+        // Respawn logic for non-auth workers that crash
         if (code !== 0 && !isAuthWorker) {
           setTimeout(() => {
             console.log(`[main] Respawning worker for ${exitedBotKey}...`);
@@ -163,7 +175,8 @@ if (isMainThread) {
 
   io.on('connection', (socket) => {
     console.log('[Server] Web client connected');
-    socket.emit('initial-accounts', Array.from(activeWorkers.keys()));
+    const onlineBots = Array.from(activeWorkers.values()).map(w => w.finalUsername).filter(Boolean);
+    socket.emit('initial-accounts', onlineBots);
 
     socket.on('spawn-auth-bot', () => {
         const tempUsername = `AuthBot-${Math.floor(Math.random() * 10000)}`;
@@ -173,10 +186,10 @@ if (isMainThread) {
 
     socket.on('send-command', (data) => {
       if (!data || !data.command) return;
-      
+
       console.log(`[main] Received command '${data.command}' from dashboard.`);
       if (data.command === 'clearmap') {
-          const workers = Array.from(activeWorkers.values());
+          const workers = Array.from(activeWorkers.values()).map(w => w.worker);
           workers.forEach((worker, index) => {
               const angle = (index / workers.length) * 2 * Math.PI;
               worker.postMessage({ type: 'command', command: 'clearmap', angle });
@@ -184,21 +197,21 @@ if (isMainThread) {
           return;
       }
       
-      for (const worker of activeWorkers.values()) {
+      for (const { worker } of activeWorkers.values()) {
         worker.postMessage({ type: 'command', ...data });
       }
     });
-    
+
     socket.on('send-chat', (message) => {
       console.log(`[main] Broadcasting chat from dashboard: ${message}`);
-      for (const worker of activeWorkers.values()) {
+      for (const { worker } of activeWorkers.values()) {
         worker.postMessage({ type: 'command', command: 'chat', message });
       }
     });
 
     socket.on('disconnect-all', () => {
       console.log(`[main] Disconnecting all bots via dashboard command.`);
-      activeWorkers.forEach(w => w.terminate());
+      activeWorkers.forEach(({ worker }) => worker.terminate());
     });
   });
 
@@ -219,6 +232,7 @@ if (isMainThread) {
   const mineflayer = require('mineflayer');
   const { pathfinder, Movements } = require('mineflayer-pathfinder');
   const { GoalFollow, GoalBlock, GoalXZ } = require('mineflayer-pathfinder').goals;
+  const Item = require('prismarine-item')(cfg.server.version);
   const mcData = require('minecraft-data')(cfg.server.version);
 
   const protectedIds = new Set(cfg.protectedNames.map(n => mcData.blocksByName[n]?.id).filter(Boolean));
@@ -238,20 +252,20 @@ if (isMainThread) {
   for (let x = -1; x <= 1; x++) {
       for (let z = -1; z <= 1; z++) {
           if (x === 0 && z === 0) continue;
-          trapOffsets.push(new Vec3(x, -1, z));
+          trapOffsets.push({ pos: new Vec3(x, -1, z), type: 'floor' });
       }
   }
   // Walls (2 layers high)
   for (let y = 0; y <= 1; y++) {
-      trapOffsets.push(new Vec3(-1, y, -1)); trapOffsets.push(new Vec3(-1, y, 1));
-      trapOffsets.push(new Vec3(1, y, -1)); trapOffsets.push(new Vec3(1, y, 1));
-      trapOffsets.push(new Vec3(0, y, -1)); trapOffsets.push(new Vec3(0, y, 1));
-      trapOffsets.push(new Vec3(-1, y, 0)); trapOffsets.push(new Vec3(1, y, 0));
+    trapOffsets.push({ pos: new Vec3(-1, y, -1), type: 'wall' }); trapOffsets.push({ pos: new Vec3(-1, y, 1), type: 'wall' });
+    trapOffsets.push({ pos: new Vec3(1, y, -1), type: 'wall' }); trapOffsets.push({ pos: new Vec3(1, y, 1), type: 'wall' });
+    trapOffsets.push({ pos: new Vec3(0, y, -1), type: 'wall' }); trapOffsets.push({ pos: new Vec3(0, y, 1), type: 'wall' });
+    trapOffsets.push({ pos: new Vec3(-1, y, 0), type: 'wall' }); trapOffsets.push({ pos: new Vec3(1, y, 0), type: 'wall' });
   }
   // Roof (9 blocks)
   for (let x = -1; x <= 1; x++) {
       for (let z = -1; z <= 1; z++) {
-          trapOffsets.push(new Vec3(x, 2, z));
+          trapOffsets.push({ pos: new Vec3(x, 2, z), type: 'roof' });
       }
   }
 
@@ -262,6 +276,7 @@ if (isMainThread) {
       bot.state.target = null;
       bot.state.mode = null;
       bot.state.isTrapping = false;
+      bot.controlState.sprint = false;
       bot.pathfinder.stop();
       updateStatus('Idle');
     };
@@ -274,15 +289,14 @@ if (isMainThread) {
         if (!targetName) return log('Target player name is required.');
         const targetPlayer = bot.players[targetName];
         if (!targetPlayer) return log(`Can't see target player ${targetName}.`);
-        
+
         resetState();
         bot.state.target = targetName;
         bot.state.mode = msg.command;
         log(`Executing '${msg.command}' on ${targetName}.`);
         updateStatus(`${msg.command.charAt(0).toUpperCase() + msg.command.slice(1)}ing ${targetName}`);
-        if (msg.command === 'trap') getBlockInHand(cfg.trapBlock);
         break;
-      
+
       case 'clearmap':
         resetState();
         bot.state.mode = 'clearmap';
@@ -290,7 +304,7 @@ if (isMainThread) {
         log(`Initializing clearmap protocol at angle ${msg.angle.toFixed(2)}.`);
         updateStatus('Clearing Map');
         break;
-        
+
       case 'stop':
         log('Stopping current action.');
         resetState();
@@ -317,8 +331,9 @@ if (isMainThread) {
     bot.once('spawn', () => {
       if (isAuthWorker) {
         fs.appendFileSync(accountsFile, bot.username + '\n', 'utf8');
-        send({ type: 'authenticated', nickname: bot.username });
       }
+      // Send authenticated message regardless, to confirm connection and final username
+      send({ type: 'authenticated', nickname: bot.username, initialUsername: initialUsername });
 
       const movements = new Movements(bot, mcData);
       movements.canDig = true;
@@ -335,18 +350,20 @@ if (isMainThread) {
     bot.on('physicsTick', async () => {
       try {
         if (!bot.state.mode) return;
-        
+
         const targetName = bot.state.target;
         const player = targetName ? bot.players[targetName] : null;
 
         switch (bot.state.mode) {
           case 'follow':
             if (!player?.entity) { bot.state.mode = null; updateStatus('Idle'); return; }
+            bot.controlState.sprint = true;
             bot.pathfinder.setGoal(new GoalFollow(player.entity, 2), true);
             break;
 
           case 'grief':
             if (!player?.entity) { bot.state.mode = null; updateStatus('Idle'); return; }
+            bot.controlState.sprint = false; // Slow down for griefing as requested
             bot.pathfinder.setGoal(new GoalFollow(player.entity, cfg.maxDig - 1), true);
             await griefLogic(player.entity.position);
             break;
@@ -355,8 +372,9 @@ if (isMainThread) {
             if (!player?.entity) { bot.state.mode = null; updateStatus('Idle'); return; }
             await trapLogic(player.entity);
             break;
-          
+
           case 'clearmap':
+            bot.controlState.sprint = true;
             if (!bot.pathfinder.isMoving()) {
               const angle = bot.state.clearMapAngle;
               const newX = bot.entity.position.x + 10000 * Math.cos(angle);
@@ -374,7 +392,7 @@ if (isMainThread) {
       for (let dx = -cfg.scanRadius; dx <= cfg.scanRadius; dx++) {
       for (let dy = -cfg.scanRadius; dy <= cfg.scanRadius; dy++) {
       for (let dz = -cfg.scanRadius; dz <= cfg.scanRadius; dz++) {
-        const bpos = targetPos.offset(dx, dy, dz);
+        const bpos = targetPos.offset(dx, dy, dz).floored();
         if (bot.entity.position.distanceTo(bpos) > cfg.maxDig) continue;
         const b = bot.blockAt(bpos);
         if (!b || b.name === 'air' || protectedIds.has(b.type)) continue;
@@ -387,8 +405,9 @@ if (isMainThread) {
 
       if (Date.now() - bot.state.lastDig < cfg.clickDelay) return;
       bot.state.lastDig = Date.now();
-      
+
       try {
+        if (bot.entity.position.distanceTo(blockToBreak.position) > cfg.maxDig) return;
         await bot.lookAt(blockToBreak.position.offset(0.5, 0.5, 0.5), true);
         await bot.dig(blockToBreak, true);
       } catch (e) { /* ignore dig errors */ }
@@ -400,7 +419,7 @@ if (isMainThread) {
         const distance = bot.entity.position.distanceTo(targetEntity.position);
         if (distance > 4.5) {
             bot.pathfinder.setGoal(new GoalFollow(targetEntity, 3.5), true);
-            return;
+            return; // Keep moving closer
         }
 
         bot.pathfinder.stop();
@@ -408,30 +427,47 @@ if (isMainThread) {
 
         const trapBlockItem = await getBlockInHand(cfg.trapBlock);
         if (!trapBlockItem) {
-            log(`Cannot find ${cfg.trapBlock} to trap with.`);
+            log(`Cannot find or get ${cfg.trapBlock} to trap with. Aborting.`);
             bot.state.isTrapping = false;
             bot.state.mode = null;
             updateStatus('Idle');
             return;
         }
-        await bot.equip(trapBlockItem, 'hand');
 
+        await bot.equip(trapBlockItem, 'hand');
         const playerPos = targetEntity.position.floored();
 
-        for (const offset of trapOffsets) {
+        for (const { pos: offset } of trapOffsets) {
             const blockPos = playerPos.plus(offset);
             const block = bot.blockAt(blockPos);
-            if (block && block.name === 'air') {
-                try {
-                    // Find a non-air block to place ON
-                    const placeAgainst = bot.blockAt(blockPos.offset(0, -1, 0)) || bot.blockAt(blockPos.offset(1, 0, 0)) || bot.blockAt(blockPos.offset(-1, 0, 0)) || bot.blockAt(blockPos.offset(0, 0, 1)) || bot.blockAt(blockPos.offset(0, 0, -1));
-                    if (placeAgainst && placeAgainst.name !== 'air') {
-                       await bot.placeBlock(placeAgainst, offset.minus(placeAgainst.position.minus(playerPos)).scaled(-1));
+
+            // Only place if the spot is empty (air, water, etc.)
+            if (block && block.boundingBox === 'empty') {
+                // To place a block, we need a solid block next to the target position
+                // Let's check all 6 adjacent positions for a solid block to place against
+                const adjacentOffsets = [
+                    new Vec3(0, -1, 0), new Vec3(0, 1, 0), new Vec3(-1, 0, 0),
+                    new Vec3(1, 0, 0), new Vec3(0, 0, -1), new Vec3(0, 0, 1)
+                ];
+
+                for (const adjOffset of adjacentOffsets) {
+                    const referenceBlockPos = blockPos.plus(adjOffset);
+                    const referenceBlock = bot.blockAt(referenceBlockPos);
+                    
+                    if (referenceBlock && referenceBlock.boundingBox === 'block') {
+                         try {
+                            // The face vector is the inverse of the offset from the placement position
+                            const faceVector = adjOffset.scaled(-1);
+                            await bot.placeBlock(referenceBlock, faceVector);
+                            // Short delay to help server keep up
+                            await new Promise(resolve => setTimeout(resolve, 50));
+                            break; // Move to the next block in the trap structure
+                         } catch(e) { /* ignore placement errors, try next reference block */ }
                     }
-                } catch(e) { /* ignore placement errors */ }
+                }
             }
         }
-        
+
         log(`Trap for ${bot.state.target} should be complete.`);
         bot.state.mode = 'follow'; // Switch to follow after trapping
         updateStatus(`Following ${bot.state.target}`);
@@ -439,25 +475,32 @@ if (isMainThread) {
     }
 
     async function getBlockInHand(itemName) {
-        let item = bot.inventory.findInventoryItem(mcData.itemsByName[itemName]?.id);
+        const itemData = mcData.itemsByName[itemName];
+        if (!itemData) return null;
+        
+        let item = bot.inventory.findInventoryItem(itemData.id);
         if (item) return item;
 
+        // If no item and in creative, give one
         if (bot.creative) {
             try {
-                const Item = require('prismarine-item')(bot.version);
-                const creativeItem = new Item(mcData.itemsByName[itemName].id, 64);
-                await bot.creative.setInventorySlot(36, creativeItem);
+                // First hotbar slot is 36
+                await bot.creative.setInventorySlot(36, new Item(itemData.id, 64));
                 log(`Gave myself a stack of ${itemName}.`);
-                return bot.inventory.findInventoryItem(mcData.itemsByName[itemName].id);
-            } catch (e) { err(e); }
+                // Re-check inventory after giving
+                return bot.inventory.findInventoryItem(itemData.id);
+            } catch (e) {
+                err(e);
+                return null;
+            }
         }
         return null;
     }
-    
+
     bot.on('error', e => err(e));
     bot.on('end', (reason) => {
       log(`Disconnected: ${reason}.`);
-      process.exit(1);
+      process.exit(1); // Main thread will handle respawning if needed
     });
   }
 
@@ -469,4 +512,3 @@ if (isMainThread) {
     process.exit(1);
   }
 })();
-
