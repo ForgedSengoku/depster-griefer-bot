@@ -4,7 +4,7 @@
   - Enhanced Logging: Added clear logs to show which file username corresponds to which authenticated in-game name.
   - Trap Logic Reworked: Significantly improved the 'trap' command's reliability. Bots now correctly acquire dirt (even in creative) and build the prison structure more effectively.
   - Griefing Adjustments: Griefing movement is now slower and non-sprinting for a more methodical block-breaking approach, as requested.
-  - Configuration Update: CPS is set to 12.
+  - Configuration Update: CPS is set to 1.
   - Dashboard Renamed: The frontend file is now `bot_dashboard.html`.
 */
 
@@ -21,8 +21,8 @@ const sharedConfig = {
   server: { host: 'crossplay.my.pebble.host', port: 25602, version: '1.21.1' },
   protectedNames: ['light_gray_concrete', 'smooth_quartz_slab', 'water', 'barrier', 'bedrock'],
   // breaking params
-  cps: 12, // Set to 12 CPS as requested
-  clickDelay: 1000 / 12,
+  cps: 1, // Set to 1 CPS for slower breaking
+  clickDelay: 1000 / 1,
   scanRadius: 8,
   maxDig: 8,
   // trap params
@@ -388,29 +388,27 @@ if (isMainThread) {
     });
 
     async function griefLogic(targetPos) {
-      const blocks = [];
-      for (let dx = -cfg.scanRadius; dx <= cfg.scanRadius; dx++) {
-      for (let dy = -cfg.scanRadius; dy <= cfg.scanRadius; dy++) {
-      for (let dz = -cfg.scanRadius; dz <= cfg.scanRadius; dz++) {
-        const bpos = targetPos.offset(dx, dy, dz).floored();
-        if (bot.entity.position.distanceTo(bpos) > cfg.maxDig) continue;
-        const b = bot.blockAt(bpos);
-        if (!b || b.name === 'air' || protectedIds.has(b.type)) continue;
-        blocks.push(b);
-      }}}
-      if (blocks.length === 0) return;
+        const blocks = [];
+        for (let dx = -cfg.scanRadius; dx <= cfg.scanRadius; dx++) {
+        for (let dy = -cfg.scanRadius; dy <= cfg.scanRadius; dy++) {
+        for (let dz = -cfg.scanRadius; dz <= cfg.scanRadius; dz++) {
+            const bpos = targetPos.offset(dx, dy, dz);
+            if (bot.entity.position.distanceTo(bpos) > cfg.maxDig) continue;
+            const b = bot.blockAt(bpos);
+            if (!b || b.name === 'air' || protectedIds.has(b.type)) continue;
+            blocks.push(b);
+        }}}
 
-      blocks.sort((a, b) => bot.entity.position.distanceTo(a.position) - bot.entity.position.distanceTo(b.position));
-      const blockToBreak = blocks[0];
+        if (blocks.length === 0) return;
+        blocks.sort((a, b) => bot.entity.position.distanceTo(a.position) - bot.entity.position.distanceTo(b.position));
+        const block = blocks[0];
 
-      if (Date.now() - bot.state.lastDig < cfg.clickDelay) return;
-      bot.state.lastDig = Date.now();
+        const now = Date.now();
+        if (now - bot.state.lastDig < cfg.clickDelay) return;
+        bot.state.lastDig = now;
 
-      try {
-        if (bot.entity.position.distanceTo(blockToBreak.position) > cfg.maxDig) return;
-        await bot.lookAt(blockToBreak.position.offset(0.5, 0.5, 0.5), true);
-        await bot.dig(blockToBreak, true);
-      } catch (e) { /* ignore dig errors */ }
+        await bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true);
+        bot.dig(block, true, 'raycast').catch(() => {});
     }
 
     async function trapLogic(targetEntity) {
