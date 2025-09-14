@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mineflayer DepSter Bot Dashboard</title>
+    <title>Mineflayer Bot Dashboard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -56,7 +56,7 @@
     <div id="dashboard">
         <div class="main-content">
             <h1 class="title-text">Block Game Crossplay Bot Control</h1>
-            <h12 class="decsription-text" style="text-align: center; color: var(--text-secondary); margin-bottom: 2rem;">Tool provided by ForgedSengoku, Designed for griefing. Griefing nocheatplus servers with 7 bots. But in this case it was designed for this server.</h12>
+            <p class="description-text" style="text-align: center; color: var(--text-secondary); margin-bottom: 2rem; display: block;">Tool provided by ForgedSengoku, designed for griefing on your server.</p>
             <div class="card-container global-actions">
                 <h2 class="section-title">Global Actions</h2>
                 <div class="form-group">
@@ -116,7 +116,6 @@
 
         function appendLog(logObj) {
             const logEntry = document.createElement('div');
-            // This now handles logs from 'Server', individual bots, and the 'Dashboard' itself
             const botPrefix = logObj.bot ? `<strong style="color: var(--accent-primary);">${logObj.bot}</strong>: ` : '';
             logEntry.innerHTML = `<span>[${new Date().toLocaleTimeString()}]</span> ${botPrefix}${logObj.text}`;
             if(logObj.type === 'error') logEntry.classList.add('log-error');
@@ -164,6 +163,10 @@
         }
         
         // --- Socket Listeners ---
+        socket.on('connect', () => {
+             appendLog({ bot: 'Dashboard', text: `Connected to server.`, type: 'info' });
+        });
+
         socket.on('initial-accounts', accounts => {
             accounts.forEach(username => botAccounts.set(username, { online: true, status: 'Idle' }));
             renderAccounts();
@@ -176,9 +179,11 @@
         });
         
         socket.on('bot-authenticated', data => {
-            const oldData = botAccounts.get(data.tempUsername);
-            botAccounts.delete(data.tempUsername);
-            botAccounts.set(data.finalUsername, { ...oldData, online: true, status: 'Idle' });
+            // Remove the temporary auth bot and add the final one
+            if (botAccounts.has(data.tempUsername)) {
+                botAccounts.delete(data.tempUsername);
+            }
+            botAccounts.set(data.finalUsername, { online: true, status: 'Idle' });
             renderAccounts();
             appendLog({ bot: 'System', text: `${data.tempUsername} authenticated as ${data.finalUsername}.`, type: 'info' });
         });
@@ -194,7 +199,7 @@
 
         socket.on('bot-offline', data => {
             if (botAccounts.has(data.username)) {
-                botAccounts.get(data.username).online = false;
+                botAccounts.delete(data.username); // Remove from list completely
                 renderAccounts();
                 appendLog({ bot: 'System', text: `${data.username} went offline.`, type: 'warn' });
             }
@@ -234,4 +239,3 @@
     </script>
 </body>
 </html>
-
